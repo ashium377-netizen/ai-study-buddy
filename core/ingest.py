@@ -7,7 +7,7 @@ def extract_text(file):
         pages.append(page.extract_text() or "")
     return "\n".join(pages)
 
-def chunk_text(text, size=400, overlap=60):
+def chunk_text(text, size=150, overlap=30):
     words = text.split()
     chunks = []
     start = 0

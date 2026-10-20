@@ -15,6 +15,7 @@ def get_collection():
 
 def add_chunks(chunks, source):
     collection = get_collection()
+    collection.delete(where={"source": source})
     embeddings = get_model().encode(chunks).tolist()
     ids = [f"{source}_{i}" for i in range(len(chunks))]
     metadatas = [{"source": source, "chunk_index": i} for i in range(len(chunks))]
@@ -44,3 +45,19 @@ def search(query, k=3):
             "distance": dist,
         })
     return results
+
+def list_sources():
+    data = get_collection().get(include=["metadatas"])
+    counts = {}
+    for m in data["metadatas"]:
+        counts[m["source"]] = counts.get(m["source"], 0) + 1
+    return counts
+
+def delete_source(source):
+    get_collection().delete(where={"source": source})
+
+def clear_all():
+    try:
+        _client.delete_collection("notes")
+    except Exception:
+        pass

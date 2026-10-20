@@ -1,32 +1,72 @@
 import streamlit as st
 from core.ingest import extract_text, chunk_text
-from core.embed import add_chunks, search
+from core.embed import add_chunks, list_sources, delete_source, clear_all
+from core.rag import answer
 
 st.title("AI Study Buddy")
 
-uploaded = st.file_uploader("Upload your notes (PDF)", type="pdf")
+with st.sidebar:
+    st.header("Your notes")
+    uploaded = st.file_uploader("Upload notes (PDF)", type="pdf")
+    if uploaded:
+        text = extract_text(uploaded)
+        chunks = chunk_text(text)
+        st.write(f"{len(text.split())} words, {len(chunks)} chunks")
+        if st.button("Save to knowledge base"):
+            with st.spinner("Embedding chunks..."):
+                n = add_chunks(chunks, source=uploaded.name)
+            st.success(f"Saved {n} chunks from {uploaded.name}")
+            st.rerun()
 
-if uploaded:
-    text = extract_text(uploaded)
-    chunks = chunk_text(text)
-    st.success(f"Extracted {len(text.split())} words into {len(chunks)} chunks")
+    st.divider()
+    st.subheader("Saved notes")
+    sources = list_sources()
+    if not sources:
+        st.caption("Nothing saved yet.")
+    for name, count in sources.items():
+        c1, c2 = st.columns([4, 1])
+        c1.write(f"{name} ({count} chunks)")
+        if c2.button("🗑", key=f"del_{name}"):
+            delete_source(name)
+            st.rerun()
+    if sources and st.button("Clear everything"):
+        clear_all()
+        st.session_state.messages = []
+        st.rerun()
 
-    if st.button("Save to knowledge base"):
-        with st.spinner("Embedding chunks... the first time takes longer"):
-            n = add_chunks(chunks, source=uploaded.name)
-        st.success(f"Saved {n} chunks from {uploaded.name}")
+st.subheader("Ask your notes")
 
-st.divider()
-st.subheader("Search your notes")
-query = st.text_input("Ask something about your notes")
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-if query:
-    results = search(query)
-    if not results:
-        st.warning("No notes saved yet. Upload a PDF and click 'Save to knowledge base' first.")
-    for r in results:
-        st.markdown(
-            f"**{r['source']}, chunk {r['chunk_index'] + 1}** "
-            f"(distance: {r['distance']:.2f})"
-        )
-        st.write(r["text"])
+def show_sources(srcs):
+    if srcs:
+        with st.expander("Sources"):
+            for s in srcs:
+                st.markdown(f"**{s['source']}, chunk {s['chunk_index'] + 1}**")
+                st.write(s["text"])
+
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.write(m["content"])
+        show_sources(m.get("sources"))
+
+question = st.chat_input("Ask a question about your notes")
+
+if question:
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.write(question)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            try:
+                reply, sources_used = answer(question)
+            except Exception as e:
+                reply, sources_used = f"Something went wrong: {e}", []
+        st.write(reply)
+        show_sources(sources_used)
+
+    st.session_state.messages.append(
+        {"role": "assistant", "content": reply, "sources": sources_used}
+    )

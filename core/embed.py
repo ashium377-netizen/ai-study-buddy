@@ -61,3 +61,13 @@ def clear_all():
         _client.delete_collection("notes")
     except Exception:
         pass
+
+def get_source_chunks(source):
+    data = get_collection().get(
+        where={"source": source}, include=["documents", "metadatas"]
+    )
+    pairs = sorted(
+        zip(data["metadatas"], data["documents"]),
+        key=lambda p: p[0]["chunk_index"],
+    )
+    return [doc for _, doc in pairs]

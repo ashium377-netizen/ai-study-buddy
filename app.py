@@ -1,9 +1,12 @@
 import streamlit as st
 from core.ingest import extract_text, chunk_text
 from core.embed import add_chunks, list_sources, delete_source, clear_all
-from core.rag import answer
+from core.rag import answer, summarize_source
 
 st.title("AI Study Buddy")
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 with st.sidebar:
     st.header("Your notes")
@@ -24,9 +27,19 @@ with st.sidebar:
     if not sources:
         st.caption("Nothing saved yet.")
     for name, count in sources.items():
-        c1, c2 = st.columns([4, 1])
-        c1.write(f"{name} ({count} chunks)")
-        if c2.button("🗑", key=f"del_{name}"):
+        st.write(f"**{name}** ({count} chunks)")
+        c1, c2 = st.columns(2)
+        if c1.button("Summarize", key=f"sum_{name}"):
+            with st.spinner("Summarizing..."):
+                try:
+                    summary = summarize_source(name)
+                except Exception as e:
+                    summary = f"Something went wrong: {e}"
+            st.session_state.messages.append(
+                {"role": "assistant", "content": f"**Summary of {name}**\n\n{summary}"}
+            )
+            st.rerun()
+        if c2.button("Delete", key=f"del_{name}"):
             delete_source(name)
             st.rerun()
     if sources and st.button("Clear everything"):
@@ -36,8 +49,6 @@ with st.sidebar:
 
 st.subheader("Ask your notes")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 def show_sources(srcs):
     if srcs:
@@ -45,6 +56,7 @@ def show_sources(srcs):
             for s in srcs:
                 st.markdown(f"**{s['source']}, chunk {s['chunk_index'] + 1}**")
                 st.write(s["text"])
+
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
@@ -54,6 +66,7 @@ for m in st.session_state.messages:
 question = st.chat_input("Ask a question about your notes")
 
 if question:
+    history = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.write(question)
@@ -61,7 +74,7 @@ if question:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                reply, sources_used = answer(question)
+                reply, sources_used = answer(question, history=history)
             except Exception as e:
                 reply, sources_used = f"Something went wrong: {e}", []
         st.write(reply)

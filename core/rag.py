@@ -1,8 +1,46 @@
-from core.embed import search
+from core.embed import search, get_source_chunks
 from core.llm import generate
 
-def answer(question, k=3):
-    results = search(question, k=k)
+
+def _history_text(history, max_turns=4):
+    recent = history[-max_turns * 2:]
+    lines = []
+    for m in recent:
+        who = "Student" if m["role"] == "user" else "Assistant"
+        lines.append(f"{who}: {m['content'][:500]}")
+    return "\n".join(lines)
+
+_FOLLOW_UP_WORDS = {
+    "it", "that", "this", "those", "these", "they", "them",
+    "its", "above", "previous", "more", "simpler", "again",
+}
+
+def looks_like_follow_up(question):
+    words = question.lower().replace("?", " ").split()
+    return len(words) <= 6 or any(w in _FOLLOW_UP_WORDS for w in words)
+
+def rewrite_question(question, history):
+    if not history or not looks_like_follow_up(question):
+        return question
+    prompt = f"""Rewrite the student's latest message as ONE standalone question that makes sense without the conversation. Keep the meaning. If it is already standalone, a greeting, or a thanks, return it unchanged. Return ONLY the question.
+
+CONVERSATION:
+{_history_text(history)}
+
+LATEST MESSAGE: {question}
+
+STANDALONE QUESTION:"""
+    try:
+        text = generate(prompt).strip()
+        return text or question
+    except Exception:
+        return question
+
+
+def answer(question, history=None, k=3):
+    history = history or []
+    standalone = rewrite_question(question, history)
+    results = search(standalone, k=k)
     if not results:
         return "No notes saved yet. Upload a PDF and save it to the knowledge base first.", []
 
@@ -11,15 +49,54 @@ def answer(question, k=3):
         for i, r in enumerate(results)
     )
 
-    prompt = f"""You are a study assistant. Answer the student's question using ONLY the notes below.
-If the answer is not in the notes, reply exactly: "I couldn't find that in your notes."
-Keep the answer short and clear. Mention the note number(s) you used, like [1].
+    prompt = f"""You are a friendly study assistant.
+
+RULES:
+- Answer using ONLY the notes below. You only see a few excerpts, not the whole document.
+- If the student greets you or says thanks, reply briefly and warmly, and say you can answer questions about their notes.
+- If the answer is not in the excerpts, reply exactly: "I couldn't find that in your notes."
+- If the student asks you to summarize everything, say you only see a few excerpts and suggest the Summarize button in the sidebar.
+- Keep answers short and clear, and cite note numbers like [1].
+- Use the conversation only to understand what words like "it" or "that" refer to.
+
+CONVERSATION SO FAR:
+{_history_text(history) or "(none)"}
 
 NOTES:
 {context}
 
-QUESTION: {question}
+STUDENT QUESTION: {question}
+(Searched as: {standalone})
 
 ANSWER:"""
 
     return generate(prompt), results
+
+
+def summarize_source(source, batch_size=40):
+    chunks = get_source_chunks(source)
+    if not chunks:
+        return "No chunks found for this file."
+
+    parts = []
+    for i in range(0, len(chunks), batch_size):
+        batch = "\n\n".join(chunks[i:i + batch_size])
+        parts.append(generate(f"""Summarize these study notes as exam-oriented bullet points.
+Group them under short headings. Include key definitions, numbers, formulas, and examples.
+Use only the notes below.
+
+NOTES:
+{batch}
+
+SUMMARY:"""))
+
+    if len(parts) == 1:
+        return parts[0]
+
+    combined = "\n\n".join(parts)
+    return generate(f"""Combine these partial summaries into ONE organized bullet-point summary with short headings. Remove repeated points.
+
+PARTIAL SUMMARIES:
+{combined}
+
+FINAL SUMMARY:""")

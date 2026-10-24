@@ -1,4 +1,6 @@
 venv/
 __pycache__/
 chroma_db/
+study_buddy.db
 .env
+_backup_before_upgrade/

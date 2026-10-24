@@ -1,0 +1,10 @@
+streamlit
+pandas
+chromadb
+sentence-transformers
+pypdf
+python-docx
+python-pptx
+python-dotenv
+google-genai
+ollama

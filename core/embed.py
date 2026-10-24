@@ -1,17 +1,21 @@
 import chromadb
-from sentence_transformers import SentenceTransformer
 
 _model = None
 _client = chromadb.PersistentClient(path="chroma_db")
 
+
 def get_model():
     global _model
     if _model is None:
+        from sentence_transformers import SentenceTransformer
+
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
+
 def get_collection():
     return _client.get_or_create_collection(name="notes")
+
 
 def add_chunks(chunks, source):
     collection = get_collection()
@@ -27,13 +31,20 @@ def add_chunks(chunks, source):
     )
     return len(chunks)
 
-def search(query, k=3):
+
+def search(query, k=3, source=None):
     collection = get_collection()
-    total = collection.count()
-    if total == 0:
+    if source:
+        available = len(collection.get(where={"source": source})["ids"])
+    else:
+        available = collection.count()
+    if available == 0:
         return []
     q_emb = get_model().encode([query]).tolist()
-    res = collection.query(query_embeddings=q_emb, n_results=min(k, total))
+    kwargs = {"where": {"source": source}} if source else {}
+    res = collection.query(
+        query_embeddings=q_emb, n_results=min(k, available), **kwargs
+    )
     results = []
     for doc, meta, dist in zip(
         res["documents"][0], res["metadatas"][0], res["distances"][0]
@@ -46,21 +57,25 @@ def search(query, k=3):
         })
     return results
 
+
 def list_sources():
     data = get_collection().get(include=["metadatas"])
     counts = {}
     for m in data["metadatas"]:
         counts[m["source"]] = counts.get(m["source"], 0) + 1
-    return counts
+    return dict(sorted(counts.items()))
+
 
 def delete_source(source):
     get_collection().delete(where={"source": source})
+
 
 def clear_all():
     try:
         _client.delete_collection("notes")
     except Exception:
         pass
+
 
 def get_source_chunks(source):
     data = get_collection().get(
@@ -71,3 +86,4 @@ def get_source_chunks(source):
         key=lambda p: p[0]["chunk_index"],
     )
     return [doc for _, doc in pairs]
+

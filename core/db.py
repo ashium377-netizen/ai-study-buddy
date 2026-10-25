@@ -55,6 +55,16 @@ def init_db():
             details TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS review_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_id INTEGER,
+            source TEXT NOT NULL,
+            topic TEXT,
+            rating INTEGER NOT NULL,
+            reviewed_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -111,6 +121,65 @@ def record_review(card_id, knew):
     )
     conn.commit()
     conn.close()
+
+
+def review_card(card_id, rating):
+    """Apply a spaced-repetition rating (0 Again, 1 Hard, 2 Good, 3 Easy)."""
+    from core import srs
+
+    conn = _connect()
+    card = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
+    if card is None:
+        conn.close()
+        return None
+    ease, interval, reps, due = srs.schedule(
+        card["ease"], card["interval"], card["reps"], rating
+    )
+    now = datetime.now().isoformat(timespec="seconds")
+    col = "missed" if rating == srs.AGAIN else "known"
+    conn.execute(
+        f"UPDATE cards SET ease = ?, interval = ?, reps = ?, due_date = ?, "
+        f"last_reviewed = ?, {col} = {col} + 1 WHERE id = ?",
+        (ease, interval, reps, due, now, card_id),
+    )
+    conn.execute(
+        "INSERT INTO review_log (card_id, source, topic, rating, reviewed_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (card_id, card["source"], card["topic"], rating, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"interval": interval, "due_date": due}
+
+
+def get_due_cards(source=None, today=None):
+    today = today or date.today().isoformat()
+    conn = _connect()
+    if source is None:
+        rows = conn.execute(
+            "SELECT * FROM cards WHERE due_date <= ? ORDER BY due_date, id", (today,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM cards WHERE source = ? AND due_date <= ? "
+            "ORDER BY due_date, id",
+            (source, today),
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def due_count(source=None):
+    return len(get_due_cards(source))
+
+
+def next_due_date(source):
+    conn = _connect()
+    row = conn.execute(
+        "SELECT MIN(due_date) FROM cards WHERE source = ?", (source,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 def delete_cards(source):
@@ -184,7 +253,7 @@ def list_attempts(source):
 
 def delete_source_data(source):
     conn = _connect()
-    for table in ("cards", "summaries", "quiz_attempts"):
+    for table in ("cards", "summaries", "quiz_attempts", "review_log"):
         conn.execute(f"DELETE FROM {table} WHERE source = ?", (source,))
     conn.commit()
     conn.close()
@@ -192,7 +261,7 @@ def delete_source_data(source):
 
 def clear_all_data():
     conn = _connect()
-    for table in ("cards", "summaries", "quiz_attempts"):
+    for table in ("cards", "summaries", "quiz_attempts", "review_log"):
         conn.execute(f"DELETE FROM {table}")
     conn.commit()
     conn.close()

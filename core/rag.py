@@ -1,4 +1,25 @@
+import re
+
 from core import embed, llm
+
+FORMULA_RULE = (
+    "Write formulas and numbers in plain text with Unicode symbols, for example "
+    "E = hν = hc/λ and h = 6.626 × 10⁻³⁴ J·s. Do NOT use LaTeX, backslashes, or $ signs."
+)
+
+
+def fix_math(text):
+    """Turn leftover LaTeX into something Streamlit can draw."""
+    text = text or ""
+    text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"$$ {m.group(1).strip()} $$", text, flags=re.S)
+    text = re.sub(r"\\\((.+?)\\\)", lambda m: f"${m.group(1).strip()}$", text, flags=re.S)
+    # "(E=h\nu=...)" : the backslash before the bracket was lost earlier
+    text = re.sub(
+        r"\(([^()\n]*\\[A-Za-z][^()\n]*)\)",
+        lambda m: f"${m.group(1).strip()}$",
+        text,
+    )
+    return text
 
 _FOLLOW_UP_WORDS = {
     "it", "that", "this", "those", "these", "they", "them",
@@ -71,7 +92,7 @@ STUDENT QUESTION: {question}
 
 ANSWER:"""
 
-    return llm.generate(prompt), results
+    return fix_math(llm.generate(prompt)), results
 
 
 def summarize_source(source, batch_size=40):
@@ -85,6 +106,7 @@ def summarize_source(source, batch_size=40):
         parts.append(llm.generate(f"""Summarize these study notes as exam-oriented bullet points.
 Group them under short headings (use ## for headings). Include key definitions, numbers, formulas, and examples.
 Use only the notes below.
+{FORMULA_RULE}
 
 NOTES:
 {batch}
@@ -92,12 +114,13 @@ NOTES:
 SUMMARY:"""))
 
     if len(parts) == 1:
-        return parts[0]
+        return fix_math(parts[0])
 
     combined = "\n\n".join(parts)
-    return llm.generate(f"""Combine these partial summaries into ONE organized bullet-point summary with short headings (use ## for headings). Remove repeated points.
+    return fix_math(llm.generate(f"""Combine these partial summaries into ONE organized bullet-point summary with short headings (use ## for headings). Remove repeated points.
+{FORMULA_RULE}
 
 PARTIAL SUMMARIES:
 {combined}
 
-FINAL SUMMARY:""")
+FINAL SUMMARY:"""))

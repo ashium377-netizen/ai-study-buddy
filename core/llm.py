@@ -51,10 +51,49 @@ def _ollama(prompt):
     return text.strip()
 
 
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+
+def _groq(prompt, retries=4):
+    import requests
+
+    key = os.getenv("GROQ_API_KEY")
+    if not key:
+        raise RuntimeError("GROQ_API_KEY not found. Check your .env file.")
+    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    delay = 3
+    for attempt in range(retries):
+        resp = requests.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+            },
+            timeout=90,
+        )
+        if resp.status_code == 200:
+            text = resp.json()["choices"][0]["message"]["content"] or ""
+            return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        if resp.status_code in (429, 500, 502, 503, 504) and attempt < retries - 1:
+            wait = delay
+            try:
+                wait = max(delay, min(float(resp.headers.get("retry-after", 0)), 30))
+            except ValueError:
+                pass
+            time.sleep(wait)
+            delay *= 2
+            continue
+        raise RuntimeError(f"Groq error {resp.status_code}: {resp.text[:200]}")
+
+
 def generate(prompt):
     provider = os.getenv("LLM_PROVIDER", "gemini").lower()
     if provider == "ollama":
         return _ollama(prompt)
+    if provider == "groq":
+        return _groq(prompt)
     return _gemini_call(prompt)
 
 

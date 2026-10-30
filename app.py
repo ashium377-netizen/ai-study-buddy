@@ -1,8 +1,10 @@
+import html
 import os
 import random
 from datetime import date
 import time
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -15,15 +17,162 @@ from core.flashcard_ui import card_html
 st.set_page_config(page_title="AI Study Buddy", page_icon="📚", layout="wide")
 db.init_db()
 
+ACCENT = "#7c5cff"
+INK = "#1f2340"
+
 st.markdown(
     """
 <style>
-  .stTabs [data-baseweb="tab"] { font-size: 1.05rem; padding: 0.6rem 1.1rem; }
-  div[data-testid="stMetricValue"] { font-size: 2.2rem; }
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  html, body, .stApp, p, h1, h2, h3, h4, h5, h6, label, li, input, textarea,
+  button p, div[data-testid="stMarkdownContainer"], div[data-testid="stMetricValue"] {
+    font-family: 'Inter', 'Source Sans Pro', system-ui, sans-serif;
+  }
+  footer, #MainMenu { visibility: hidden; }
+  .block-container { padding-top: 2rem; padding-bottom: 4rem; max-width: 1100px; }
+
+  /* sidebar */
+  section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #f4f0ff 0%, #fbfaff 100%);
+    border-right: 1px solid #e2dcff;
+  }
+
+  /* buttons */
+  .stButton > button, .stDownloadButton > button {
+    border-radius: 12px; font-weight: 600; padding: 0.55rem 1rem;
+    border: 1px solid #d9d0ff; transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .stButton > button:hover, .stDownloadButton > button:hover {
+    transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124, 92, 255, .18);
+    border-color: #7c5cff;
+  }
+  .stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #7c5cff 0%, #9b6bff 100%); border: none; color: #fff;
+  }
+
+  div[data-testid="stColumn"] div[data-testid="stElementContainer"]:has(> .stButton),
+  div[data-testid="stColumn"] .stButton { width: 100% !important; }
+  div[data-testid="stColumn"] .stButton > button { width: 100%; }
+
+  /* metric cards */
+  div[data-testid="stMetric"] {
+    background: #ffffff; border: 1px solid #e8e2ff; border-radius: 16px;
+    padding: 14px 18px; box-shadow: 0 2px 10px rgba(124, 92, 255, .07);
+  }
+  div[data-testid="stMetricValue"] { font-size: 2rem; font-weight: 700; color: #1f2340; }
+  div[data-testid="stMetricLabel"] p { color: #6b7280; font-weight: 600; }
+
+  /* expanders, chat, tables, bordered boxes */
+  div[data-testid="stExpander"] {
+    border: 1px solid #e8e2ff; border-radius: 14px; background: #ffffff; overflow: hidden;
+  }
+  div[data-testid="stChatMessage"] {
+    background: #ffffff; border: 1px solid #eee9ff; border-radius: 16px; padding: 14px 16px;
+  }
+  div[data-testid="stDataFrame"] {
+    border: 1px solid #e8e2ff; border-radius: 12px; overflow: hidden;
+  }
+  div[data-testid="stAlert"] { border-radius: 14px; }
+  h1, h2, h3 { letter-spacing: -0.02em; font-weight: 700; }
+
+  /* hero / landing page */
+  .hero { text-align: center; padding: 2.2rem 0 1.2rem; }
+  .hero h1 {
+    font-size: 3rem; font-weight: 800; line-height: 1.1; margin: 0 0 .6rem;
+    background: linear-gradient(135deg, #5b3df5 0%, #b36bff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p { font-size: 1.15rem; color: #5b6078; max-width: 640px; margin: 0 auto; }
+  .pill {
+    display: inline-block; background: #efe9ff; color: #5b3df5; font-weight: 600;
+    font-size: .8rem; padding: 4px 12px; border-radius: 999px; margin-bottom: 1rem;
+  }
+  .feature-grid {
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 16px; margin: 1.8rem 0 1.2rem;
+  }
+  .feature {
+    flex: 1 1 230px; max-width: 262px;
+    background: #ffffff; border: 1px solid #e8e2ff; border-radius: 18px; padding: 20px;
+    box-shadow: 0 2px 12px rgba(124, 92, 255, .07); transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .feature:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(124, 92, 255, .16); }
+  .feature .ico { font-size: 1.8rem; margin-bottom: 8px; }
+  .feature b { display: block; font-size: 1.05rem; margin-bottom: 4px; color: #1f2340; }
+  .feature span { color: #6b7280; font-size: .93rem; line-height: 1.45; }
+  .steps { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; margin-top: 1rem; }
+  .step {
+    background: #f1edff; border-radius: 14px; padding: 10px 16px; color: #3b2fa0;
+    font-weight: 600; font-size: .95rem;
+  }
+  .step i {
+    font-style: normal; background: #7c5cff; color: #fff; border-radius: 999px;
+    padding: 1px 9px; margin-right: 8px; font-size: .85rem;
+  }
+
+  /* header chip for the active file */
+  .file-chip {
+    display: inline-block; background: #efe9ff; color: #3b2fa0; font-weight: 600;
+    padding: 6px 14px; border-radius: 999px; font-size: .9rem; margin-bottom: .6rem;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* phones */
+  @media (max-width: 640px) {
+    .block-container { padding-left: 1rem; padding-right: 1rem; padding-top: 3.8rem; }
+    .hero h1 { font-size: 2.1rem; }
+    .hero p { font-size: 1rem; }
+    div[data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .6rem; }
+    div[data-testid="stColumn"] { min-width: calc(50% - .6rem) !important; flex: 1 1 calc(50% - .6rem) !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.5rem; }
+  }
 </style>
 """,
     unsafe_allow_html=True,
 )
+
+
+def _style(chart, height):
+    return (
+        chart.properties(height=height)
+        .configure_view(strokeWidth=0)
+        .configure_axis(
+            labelColor="#6b7280", titleColor="#6b7280", gridColor="#eee9ff",
+            domainColor="#e2dcff", tickColor="#e2dcff", labelFontSize=12,
+        )
+    )
+
+
+def themed_bar(df, x, y, height=260):
+    chart = (
+        alt.Chart(df)
+        .mark_bar(color=ACCENT, cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+        .encode(
+            x=alt.X(f"{x}:N", sort=None, title=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y(f"{y}:Q", title=None, axis=alt.Axis(tickMinStep=1)),
+            tooltip=[x, y],
+        )
+    )
+    return _style(chart, height)
+
+
+def themed_line(df, x, y, height=260):
+    base = alt.Chart(df).encode(
+        x=alt.X(f"{x}:O", title="Test number", axis=alt.Axis(labelAngle=0)),
+        y=alt.Y(f"{y}:Q", title=None, scale=alt.Scale(domain=[0, 100])),
+        tooltip=[x, y],
+    )
+    line = base.mark_line(color=ACCENT, strokeWidth=3)
+    points = base.mark_point(color=ACCENT, filled=True, size=90)
+    return _style(line + points, height)
+
+
+def show_chart(chart):
+    # Newer Streamlit uses width="stretch"; older versions use use_container_width.
+    try:
+        st.altair_chart(chart, width="stretch")
+    except TypeError:
+        st.altair_chart(chart, use_container_width=True)
 
 LETTERS = "ABCD"
 
@@ -689,7 +838,7 @@ def render_progress(active):
             {"Reviews": [n for _, n in days]},
             index=[d.strftime("%d %b") for d, _ in days],
         )
-        st.bar_chart(df)
+        show_chart(themed_bar(df.reset_index(names="Day"), "Day", "Reviews"))
     else:
         st.caption("No reviews yet. Rate some cards in Flashcards → Review due.")
 
@@ -716,7 +865,14 @@ def render_progress(active):
         st.subheader("Your cards")
         stages = stats.card_stages(src)
         if sum(stages.values()):
-            st.bar_chart(pd.DataFrame({"Cards": list(stages.values())}, index=list(stages)))
+            show_chart(
+                themed_bar(
+                    pd.DataFrame({"Stage": list(stages), "Cards": list(stages.values())}),
+                    "Stage",
+                    "Cards",
+                    height=220,
+                )
+            )
             st.caption(
                 "New = not reviewed yet · Learning = seen, short gaps · "
                 "Mature = you recall it after 3+ weeks"
@@ -726,10 +882,16 @@ def render_progress(active):
 
     st.subheader("Test scores")
     if history:
-        st.line_chart(
-            pd.DataFrame(
-                {"Score (%)": [h[1] for h in history]},
-                index=[f"{i + 1}" for i in range(len(history))],
+        show_chart(
+            themed_line(
+                pd.DataFrame(
+                    {
+                        "Test": list(range(1, len(history) + 1)),
+                        "Score (%)": [h[1] for h in history],
+                    }
+                ),
+                "Test",
+                "Score (%)",
             )
         )
         st.caption("Each point is one test, oldest on the left.")
@@ -764,26 +926,43 @@ def render_progress(active):
 
 # ------------------------------------------------------------------ main page
 if not sources:
-    st.title("Turn your notes into a study system")
-    st.write("Add your notes in the sidebar to get started. Then:")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1.container(border=True):
-        st.markdown("**💬 Chat**")
-        st.caption("Ask questions and get answers with sources from your notes.")
-    with c2.container(border=True):
-        st.markdown("**📝 Summary**")
-        st.caption("An exam-ready summary of the whole file.")
-    with c3.container(border=True):
-        st.markdown("**🃏 Flashcards**")
-        st.caption("Flip cards and mark what you know.")
-    with c4.container(border=True):
-        st.markdown("**✅ Test**")
-        st.caption("Take a graded test and see your score.")
-    st.caption("Works with PDF, Word, PowerPoint, text files, and photos of notes.")
+    st.markdown(
+        """
+<div class="hero">
+  <div class="pill">📚 AI Study Buddy</div>
+  <h1>Turn your notes into<br>a study system</h1>
+  <p>Upload your notes and get answers with sources, exam-ready summaries,
+  flashcards that come back at the right time, and tests that show what to revise.</p>
+</div>
+<div class="feature-grid">
+  <div class="feature"><div class="ico">💬</div><b>Chat with your notes</b>
+    <span>Ask anything and get answers from your own material, with the sections they came from.</span></div>
+  <div class="feature"><div class="ico">📝</div><b>Smart summaries</b>
+    <span>An exam-ready summary of the whole file, organised under headings.</span></div>
+  <div class="feature"><div class="ico">🃏</div><b>Spaced flashcards</b>
+    <span>Flip cards that return just before you would forget them.</span></div>
+  <div class="feature"><div class="ico">✅</div><b>Graded tests</b>
+    <span>Multiple-choice tests with explanations and a score for every topic.</span></div>
+  <div class="feature"><div class="ico">📊</div><b>Progress tracking</b>
+    <span>Streaks, review history and your weakest topics at a glance.</span></div>
+</div>
+<div class="steps">
+  <div class="step"><i>1</i>Add notes in the sidebar</div>
+  <div class="step"><i>2</i>Chat, summarise or make flashcards</div>
+  <div class="step"><i>3</i>Take a test and track progress</div>
+</div>
+<p style="text-align:center;color:#8a8fa8;margin-top:1.4rem;font-size:.9rem">
+Works with PDF, Word, PowerPoint, text files and photos of notes.</p>
+""",
+        unsafe_allow_html=True,
+    )
     st.stop()
 
 # Streamlit only pins the chat box to the bottom of the page when it sits at the
 # top level, not inside st.tabs. So we use a tab-like selector instead of st.tabs.
+st.markdown(
+    f'<div class="file-chip">📄 {html.escape(active)}</div>', unsafe_allow_html=True
+)
 VIEWS = ["💬 Chat", "📝 Summary", "🃏 Flashcards", "✅ Test", "📊 Progress"]
 if hasattr(st, "segmented_control"):
     view = st.segmented_control(

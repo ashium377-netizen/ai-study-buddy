@@ -13,7 +13,7 @@ def card_html(question, answer, topic):
     from {{ opacity: 0; transform: scale(0.94); }}
     to   {{ opacity: 1; transform: scale(1); }}
   }}
-  .scene {{ perspective: 1200px; width: 100%; height: 300px; cursor: pointer; outline: none; }}
+  .scene {{ perspective: 1200px; width: 100%; height: 300px; cursor: pointer; outline: none; margin-top: 4px; }}
   .card {{
     position: relative; width: 100%; height: 100%;
     transition: transform 0.55s; transform-style: preserve-3d;
@@ -26,8 +26,8 @@ def card_html(question, answer, topic):
     align-items: center; justify-content: center;
     padding: 32px 36px; box-sizing: border-box; text-align: center;
   }}
-  .front {{ background: #ffffff; border: 2px solid #7c5cff; color: #1f2340; }}
-  .back  {{ background: #f1edff; border: 2px solid #7c5cff; color: #1f2340; transform: rotateY(180deg); }}
+  .front {{ background: linear-gradient(160deg, #ffffff 0%, #f7f4ff 100%); border: 2px solid #7c5cff; color: #1f2340; box-shadow: 0 10px 28px rgba(124, 92, 255, .18); }}
+  .back  {{ background: linear-gradient(160deg, #f1edff 0%, #e6deff 100%); border: 2px solid #7c5cff; color: #1f2340; transform: rotateY(180deg); box-shadow: 0 10px 28px rgba(124, 92, 255, .18); }}
   .label {{ position: absolute; top: 14px; left: 20px; font-size: 12px; color: #6a5acd; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }}
   .topic {{ position: absolute; top: 14px; right: 20px; font-size: 12px; color: #6b7280; }}
   .text  {{ font-size: 22px; line-height: 1.45; max-height: 200px; overflow-y: auto; }}

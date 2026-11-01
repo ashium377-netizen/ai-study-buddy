@@ -8,3 +8,4 @@ python-pptx
 python-dotenv
 google-genai
 ollama
+requests

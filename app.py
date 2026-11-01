@@ -1,6 +1,8 @@
 import html
 import os
 import random
+import threading
+import uuid
 from datetime import date
 import time
 
@@ -132,6 +134,77 @@ st.markdown(
 )
 
 
+HOME_FEATURES = """
+<div class="feature-grid">
+  <div class="feature"><div class="ico">💬</div><b>Chat with your notes</b>
+    <span>Ask anything and get answers from your own material, with the sections they came from.</span></div>
+  <div class="feature"><div class="ico">📝</div><b>Smart summaries</b>
+    <span>An exam-ready summary of the whole file, organised under headings.</span></div>
+  <div class="feature"><div class="ico">🃏</div><b>Spaced flashcards</b>
+    <span>Flip cards that return just before you would forget them.</span></div>
+  <div class="feature"><div class="ico">✅</div><b>Graded tests</b>
+    <span>Multiple-choice tests with explanations and a score for every topic.</span></div>
+  <div class="feature"><div class="ico">📊</div><b>Progress tracking</b>
+    <span>Streaks, review history and your weakest topics at a glance.</span></div>
+</div>
+<div class="steps">
+  <div class="step"><i>1</i>Add notes in the sidebar</div>
+  <div class="step"><i>2</i>Chat, summarise or make flashcards</div>
+  <div class="step"><i>3</i>Take a test and track progress</div>
+</div>
+<p style="text-align:center;color:#8a8fa8;margin-top:1.4rem;font-size:.9rem">
+Works with PDF, Word, PowerPoint, text files and photos of notes.</p>
+"""
+
+
+
+# ------------------------------------------------------------------ landing page
+# A full-screen start page shown before the app. The app only runs once the
+# visitor clicks "Get started", which sets st.session_state["entered"] = True.
+def enter_app():
+    st.session_state["entered"] = True
+
+
+def leave_app():
+    st.session_state["entered"] = False
+
+
+if not st.session_state.get("entered"):
+    # Hide the sidebar and its arrow so nothing but the landing page shows.
+    st.markdown(
+        """
+<style>
+  section[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"],
+  [data-testid="collapsedControl"] { display: none !important; }
+  .block-container { max-width: 1000px; padding-top: 3rem; }
+  .hero.big { padding: 3.5rem 0 1.4rem; }
+  .hero.big h1 { font-size: 3.8rem; }
+  .hero.big p { font-size: 1.25rem; max-width: 680px; }
+  .how-title { text-align: center; margin: 2.6rem 0 .2rem; font-size: 1.6rem; font-weight: 700; }
+  @media (max-width: 640px) {
+    .hero.big { padding-top: 1.5rem; } .hero.big h1 { font-size: 2.3rem; }
+    div[data-testid="stColumn"] { min-width: 100% !important; flex: 1 1 100% !important; }
+  }
+</style>
+<div class="hero big">
+  <div class="pill">📚 AI Study Buddy</div>
+  <h1>Turn your notes into<br>a study system</h1>
+  <p>Upload your notes and get answers with sources, exam-ready summaries,
+  flashcards that come back at the right time, and tests that show what to revise.</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    _, mid, _ = st.columns([1, 1, 1])
+    mid.button(
+        "Get started  →", type="primary", use_container_width=True,
+        key="get_started", on_click=enter_app,
+    )
+    st.markdown('<div class="how-title">Everything you need to study smarter</div>', unsafe_allow_html=True)
+    st.markdown(HOME_FEATURES, unsafe_allow_html=True)
+    st.stop()
+
+
 def _style(chart, height):
     return (
         chart.properties(height=height)
@@ -223,6 +296,65 @@ def show_html(html_text, height):
         components.html(html_text, height=height)
 
 
+# ---- background jobs
+# Streamlit stops the running script whenever you click something else, which
+# used to kill test / flashcard / summary generation half-way. So the slow AI
+# work now runs in a separate thread. The thread keeps going while you switch
+# tabs, and each tab checks the job's status when you come back to it.
+@st.cache_resource
+def _job_store():
+    return {}  # one dict shared by all reruns of the app
+
+
+def _job_key(kind, source):
+    st.session_state.setdefault("sid", uuid.uuid4().hex)
+    return (st.session_state["sid"], kind, source)
+
+
+def start_job(kind, source, fn):
+    """Run fn(progress) in the background. progress(done, total) updates the bar."""
+    job = {"done": 0, "total": 1, "result": None, "error": None, "finished": False}
+
+    def progress(done, total):
+        job["done"], job["total"] = done, max(total, 1)
+
+    def run():
+        try:
+            job["result"] = fn(progress)
+        except Exception as e:
+            job["error"] = e
+        finally:
+            job["finished"] = True
+
+    _job_store()[_job_key(kind, source)] = job
+    threading.Thread(target=run, daemon=True).start()
+
+
+def get_job(kind, source):
+    return _job_store().get(_job_key(kind, source))
+
+
+def clear_job(kind, source):
+    _job_store().pop(_job_key(kind, source), None)
+
+
+@st.fragment(run_every=1)
+def show_job_progress(kind, source, text):
+    """Redraws itself every second. When the job ends, reruns the whole page."""
+    job = get_job(kind, source)
+    if job is None or job["finished"]:
+        st.rerun()
+        return
+    if kind == "summary":
+        st.info("Reading all your notes... this can take a minute. You can open other tabs meanwhile.")
+        return
+    st.progress(
+        min(job["done"] / job["total"], 1.0),
+        text=f"{text} ({job['done']}/{job['total']})",
+    )
+    st.caption("This keeps running in the background. You can open other tabs and come back.")
+
+
 def reset_study_state():
     st.session_state.pop("review", None)
     st.session_state.study = {}
@@ -234,6 +366,7 @@ sources = embed.list_sources()
 
 with st.sidebar:
     st.title("📚 AI Study Buddy")
+    st.button("← Start page", key="back_start", on_click=leave_app)
     st.subheader("Add notes")
     mode = st.radio(
         "How to add notes",
@@ -371,13 +504,19 @@ def render_summary(active):
     summary = db.get_summary(active)
     st.subheader(f"Summary of {active}")
     label = "Regenerate summary" if summary else "Generate summary"
-    if st.button(label, type="secondary" if summary else "primary", key="gen_summary"):
-        try:
-            with st.spinner("Reading all your notes... this can take a minute."):
-                summary = rag.summarize_source(active)
+    job = get_job("summary", active)
+    if job and not job["finished"]:
+        show_job_progress("summary", active, "")
+    if job and job["finished"]:
+        clear_job("summary", active)
+        if job["error"]:
+            st.error(friendly_error(job["error"]))
+        else:
+            summary = job["result"]
             db.save_summary(active, summary)
-        except Exception as e:
-            st.error(friendly_error(e))
+    if st.button(label, type="secondary" if summary else "primary", key="gen_summary", disabled=bool(job and not job["finished"])):
+        start_job("summary", active, lambda progress: rag.summarize_source(active))
+        st.rerun()
     if summary:
         st.markdown(rag.fix_math(summary))
         st.download_button(
@@ -403,31 +542,31 @@ def render_flashcards(active):
         per = c1.selectbox("Cards per section", [2, 3, 4], index=1, key="fc_per")
         quick = c2.checkbox("Quick test (first 5 sections only)", key="fc_quick")
         gen_label = "Regenerate flashcards" if rows else "Generate flashcards"
-        if st.button(gen_label, type="primary", key="fc_gen"):
-            bar = st.progress(0.0, text="Starting...")
-
-            def on_progress(done, total):
-                bar.progress(done / total, text=f"Section {done} of {total}")
-
-            try:
-                new = cardlib.generate_for_source(
+        job = get_job("cards", active)
+        if job and not job["finished"]:
+            show_job_progress("cards", active, "Writing flashcards, section")
+        if job and job["finished"]:
+            clear_job("cards", active)
+            if job["error"]:
+                st.error(friendly_error(job["error"]))
+            elif not job["result"]:
+                st.warning("No cards were created. Please try again.")
+            else:
+                db.replace_cards(active, job["result"])
+                st.session_state.pop("review", None)
+                st.session_state.study = {}
+                st.session_state["notice"] = f"Created {len(job['result'])} flashcards"
+                st.rerun()
+        if st.button(gen_label, type="primary", key="fc_gen", disabled=bool(job and not job["finished"])):
+            start_job(
+                "cards", active,
+                lambda progress: cardlib.generate_for_source(
                     active,
                     max_chunks=5 if quick else None,
                     per_chunk=per,
-                    progress=on_progress,
-                )
-            except Exception as e:
-                bar.empty()
-                st.error(friendly_error(e))
-                return
-            bar.empty()
-            if not new:
-                st.warning("No cards were created. Please try again.")
-                return
-            db.replace_cards(active, new)
-            st.session_state.pop("review", None)
-            st.session_state.study = {}
-            st.session_state["notice"] = f"Created {len(new)} flashcards"
+                    progress=progress,
+                ),
+            )
             st.rerun()
         if rows and st.button("Delete this deck", key="fc_delete"):
             db.delete_cards(active)
@@ -639,34 +778,35 @@ def render_test(active):
         n = st.select_slider(
             "Number of questions", options=[5, 10, 15, 20], value=10, key="test_n"
         )
-        if st.button("Start test", type="primary", key="test_start"):
-            bar = st.progress(0.0, text="Writing your questions...")
-
-            def on_progress(done, total):
-                bar.progress(done / total, text=f"Writing questions ({done}/{total})")
-
-            try:
-                qs = quizlib.generate_quiz(active, n=n, progress=on_progress)
-            except Exception as e:
-                bar.empty()
-                st.error(friendly_error(e))
-                return
-            bar.empty()
-            if len(qs) < 3:
+        job = get_job("test", active)
+        if job and not job["finished"]:
+            show_job_progress("test", active, "Writing questions")
+        if job and job["finished"]:
+            clear_job("test", active)
+            if job["error"]:
+                st.error(friendly_error(job["error"]))
+            elif len(job["result"]) < 3:
                 st.error(
                     "Couldn't write enough good questions. Try again, "
                     "or add more notes."
                 )
-                return
-            st.session_state.test = {
-                "id": int(time.time() * 1000),
-                "source": active,
-                "questions": qs,
-                "answers": {},
-                "pos": 0,
-                "done": False,
-                "result": None,
-            }
+            else:
+                st.session_state.test = {
+                    "id": int(time.time() * 1000),
+                    "source": active,
+                    "questions": job["result"],
+                    "answers": {},
+                    "pos": 0,
+                    "done": False,
+                    "result": None,
+                }
+                st.rerun()
+
+        if st.button("Start test", type="primary", key="test_start", disabled=bool(job and not job["finished"])):
+            start_job(
+                "test", active,
+                lambda progress: quizlib.generate_quiz(active, n=n, progress=progress),
+            )
             st.rerun()
 
         attempts = db.list_attempts(active)
@@ -924,8 +1064,13 @@ def render_progress(active):
         st.caption("Shows up after a few reviews or a test.")
 
 
-# ------------------------------------------------------------------ main page
-if not sources:
+# ------------------------------------------------------------------ home
+def go_to(view_name):
+    # Used as a button callback: changes the selected view before the next rerun.
+    st.session_state["view"] = view_name
+
+
+def render_home(active):
     st.markdown(
         """
 <div class="hero">
@@ -934,54 +1079,65 @@ if not sources:
   <p>Upload your notes and get answers with sources, exam-ready summaries,
   flashcards that come back at the right time, and tests that show what to revise.</p>
 </div>
-<div class="feature-grid">
-  <div class="feature"><div class="ico">💬</div><b>Chat with your notes</b>
-    <span>Ask anything and get answers from your own material, with the sections they came from.</span></div>
-  <div class="feature"><div class="ico">📝</div><b>Smart summaries</b>
-    <span>An exam-ready summary of the whole file, organised under headings.</span></div>
-  <div class="feature"><div class="ico">🃏</div><b>Spaced flashcards</b>
-    <span>Flip cards that return just before you would forget them.</span></div>
-  <div class="feature"><div class="ico">✅</div><b>Graded tests</b>
-    <span>Multiple-choice tests with explanations and a score for every topic.</span></div>
-  <div class="feature"><div class="ico">📊</div><b>Progress tracking</b>
-    <span>Streaks, review history and your weakest topics at a glance.</span></div>
-</div>
-<div class="steps">
-  <div class="step"><i>1</i>Add notes in the sidebar</div>
-  <div class="step"><i>2</i>Chat, summarise or make flashcards</div>
-  <div class="step"><i>3</i>Take a test and track progress</div>
-</div>
-<p style="text-align:center;color:#8a8fa8;margin-top:1.4rem;font-size:.9rem">
-Works with PDF, Word, PowerPoint, text files and photos of notes.</p>
 """,
         unsafe_allow_html=True,
     )
-    st.stop()
 
+    if active:
+        st.subheader("Your study space")
+        total_cards = sum(db.count_cards(n) for n in sources)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Notes saved", len(sources))
+        m2.metric("Flashcards", total_cards)
+        m3.metric("Due today", db.due_count())
+        m4.metric("Study streak", f"{stats.streak()} day(s)")
+
+        st.caption(f"Working on: {active}")
+        b1, b2, b3, b4 = st.columns(4)
+        b1.button("💬 Ask a question", key="home_chat", on_click=go_to, args=(VIEWS[1],))
+        b2.button("🃏 Review flashcards", key="home_cards", on_click=go_to, args=(VIEWS[3],))
+        b3.button("✅ Take a test", key="home_test", on_click=go_to, args=(VIEWS[4],))
+        b4.button("📊 See progress", key="home_prog", on_click=go_to, args=(VIEWS[5],))
+        st.subheader("What you can do here")
+    else:
+        st.info("👈 Add your first notes in the sidebar to get started.")
+
+    st.markdown(HOME_FEATURES, unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------------ main page
 # Streamlit only pins the chat box to the bottom of the page when it sits at the
 # top level, not inside st.tabs. So we use a tab-like selector instead of st.tabs.
-st.markdown(
-    f'<div class="file-chip">📄 {html.escape(active)}</div>', unsafe_allow_html=True
-)
-VIEWS = ["💬 Chat", "📝 Summary", "🃏 Flashcards", "✅ Test", "📊 Progress"]
+VIEWS = ["🏠 Home", "💬 Chat", "📝 Summary", "🃏 Flashcards", "✅ Test", "📊 Progress"]
+if not sources:
+    render_home(None)
+    st.stop()
+st.session_state.setdefault("view", VIEWS[0])
 if hasattr(st, "segmented_control"):
     view = st.segmented_control(
-        "View", VIEWS, default=VIEWS[0], key="view", label_visibility="collapsed"
+        "View", VIEWS, key="view", label_visibility="collapsed"
     )
 else:
     view = st.radio(
         "View", VIEWS, horizontal=True, key="view", label_visibility="collapsed"
     )
 view = view or VIEWS[0]
+
+if active:
+    st.markdown(
+        f'<div class="file-chip">📄 {html.escape(active)}</div>', unsafe_allow_html=True
+    )
 st.divider()
 
 if view == VIEWS[0]:
-    render_chat(active)
+    render_home(active)
 elif view == VIEWS[1]:
-    render_summary(active)
+    render_chat(active)
 elif view == VIEWS[2]:
-    render_flashcards(active)
+    render_summary(active)
 elif view == VIEWS[3]:
+    render_flashcards(active)
+elif view == VIEWS[4]:
     render_test(active)
 else:
     render_progress(active)

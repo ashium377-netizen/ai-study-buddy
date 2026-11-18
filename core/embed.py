@@ -13,7 +13,13 @@ def get_model():
         if _model is None:
             from sentence_transformers import SentenceTransformer
 
-            _model = SentenceTransformer("all-MiniLM-L6-v2")
+            try:
+                # Use the copy already saved on this PC, without checking the
+                # internet for updates (that check could add 10-40 s on slow Wi-Fi).
+                _model = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
+            except Exception:
+                # First run on a new PC: nothing saved yet, so download it once.
+                _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
 

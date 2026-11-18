@@ -13,3 +13,8 @@ toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+# Don't scan files for changes. Saves CPU (PyTorch has thousands of files).
+# After editing code, stop the app (Ctrl+C) and run it again to see changes.
+fileWatcherType = "none"

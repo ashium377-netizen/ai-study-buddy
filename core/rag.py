@@ -29,6 +29,10 @@ _FOLLOW_UP_WORDS = {
 }
 
 
+# The AI starts its reply with this tag when it did not use the notes.
+NO_NOTES = "[NO-NOTES]"
+
+
 def looks_like_follow_up(question):
     # Only rewrite when the question points back to the chat ("explain it"),
     # or is too short to search on its own ("why?"). Each rewrite is an extra
@@ -82,9 +86,10 @@ RULES:
 - Answer using ONLY the notes below. You only see a few excerpts, not the whole document.
 - If the student greets you or says thanks, reply briefly and warmly, and say you can answer questions about their notes.
 - If the student asks about you or this app (for example "what can you do?", "who are you?", "how do I use this?"), do not use the notes. Explain briefly that you answer questions from their uploaded notes and show the sources, and that the app can also make a summary, flashcards that come back on a spaced schedule, and practice tests, and track their progress and weak topics.
+- For greetings, thanks, and questions about you or this app: start your reply with {NO_NOTES}.
 - Otherwise, if the answer is not in the excerpts, reply exactly: "I couldn't find that in your notes."
 - If the student asks you to summarize everything, say you only see a few excerpts and suggest the Summary tab.
-- Keep answers short and clear, and cite note numbers like [1].
+- Keep answers short and clear. Do not write note numbers like [1] or (Source: ...) in your answer; the app shows the sources separately.
 - Use the conversation only to understand what words like "it" or "that" refer to.
 
 CONVERSATION SO FAR:
@@ -98,7 +103,18 @@ STUDENT QUESTION: {question}
 
 ANSWER:"""
 
-    return fix_math(llm.generate(prompt)), results
+    reply = fix_math(llm.generate(prompt))
+    # Note numbers like [1] look messy, so remove any the AI still wrote.
+    # The Sources box under the answer shows where it came from instead.
+    # (?<!\w) keeps code like arr[1] untouched.
+    reply = re.sub(r"\s*\([^()]*(?<![\w\]])\[\d+\][^()]*\)", "", reply)  # "(e.g. [1], [2])"
+    reply = re.sub(r"\s*(?<![\w\]])\[\d+\](?:\s*,?\s*\[\d+\])*", "", reply)
+    if "NO-NOTES" in reply or "couldn't find that in your notes" in reply.lower():
+        # Greeting, a question about the app, or not found: the notes were
+        # not used, so return no sources and the Sources box stays hidden.
+        reply = re.sub(r"[*_`]*\[?NO-NOTES\]?[*_`]*:?", "", reply)
+        return reply.strip(), []
+    return reply.strip(), results
 
 
 # Free AI tiers limit how many tokens you can send per minute (Groq: about 8000).

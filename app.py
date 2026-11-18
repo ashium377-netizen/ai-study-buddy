@@ -23,13 +23,16 @@ db.init_db()
 
 @st.cache_resource
 def _warm_up_model():
-    # Load the embedding model in the background as soon as the app starts,
-    # so the first chat question doesn't have to wait for it. Runs once.
-    threading.Thread(target=embed.get_model, daemon=True).start()
+    # Load the embedding model in the background, so the first chat question
+    # doesn't have to wait for it. Runs once per app start. It is called only
+    # AFTER the page has been drawn: loading the model uses a lot of CPU, and
+    # starting it earlier kept the browser on a white screen.
+    def load():
+        time.sleep(2)  # let the browser finish drawing the page first
+        embed.get_model()
+
+    threading.Thread(target=load, daemon=True).start()
     return True
-
-
-_warm_up_model()
 
 ACCENT = "#7c5cff"
 INK = "#1f2340"
@@ -37,10 +40,9 @@ INK = "#1f2340"
 st.markdown(
     """
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
   html, body, .stApp, p, h1, h2, h3, h4, h5, h6, label, li, input, textarea,
   button p, div[data-testid="stMarkdownContainer"], div[data-testid="stMetricValue"] {
-    font-family: 'Inter', 'Source Sans Pro', system-ui, sans-serif;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
   }
   footer, #MainMenu { visibility: hidden; }
   .block-container { padding-top: 2rem; padding-bottom: 4rem; max-width: 1100px; }
@@ -234,7 +236,10 @@ if not st.session_state.get("entered"):
     )
     st.markdown('<div class="how-title">Everything you need to study smarter</div>', unsafe_allow_html=True)
     st.markdown(HOME_FEATURES, unsafe_allow_html=True)
+    _warm_up_model()  # page is drawn, now start loading the search model
     st.stop()
+
+_warm_up_model()  # opened straight into the app (refresh / Back): start it here
 
 
 def _style(chart, height):
@@ -509,9 +514,9 @@ def render_chat(active):
     for m in st.session_state.messages:
         with st.chat_message(m["role"]):
             st.write(m["content"])
-            # Only show sources when the answer actually used the notes,
-            # i.e. it cites them like [1]. Not for "hi" or "couldn't find".
-            if m["role"] == "assistant" and re.search(r"\[\d+\]", m["content"]):
+            # rag.answer returns no sources for "hi", app questions and
+            # "couldn't find", so the Sources box only shows for real answers.
+            if m["role"] == "assistant":
                 show_sources(m.get("sources"))
 
     waiting = get_job("chat", "chat") is not None

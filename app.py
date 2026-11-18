@@ -1,6 +1,7 @@
 import html
 import os
 import random
+import re
 import threading
 import uuid
 from datetime import date
@@ -16,8 +17,19 @@ from core import db, embed, ingest, rag, srs, stats
 from core import quiz as quizlib
 from core.flashcard_ui import card_html
 
-st.set_page_config(page_title="AI Study Buddy", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Mnemo · AI Study Buddy", page_icon="📚", layout="wide")
 db.init_db()
+
+
+@st.cache_resource
+def _warm_up_model():
+    # Load the embedding model in the background as soon as the app starts,
+    # so the first chat question doesn't have to wait for it. Runs once.
+    threading.Thread(target=embed.get_model, daemon=True).start()
+    return True
+
+
+_warm_up_model()
 
 ACCENT = "#7c5cff"
 INK = "#1f2340"
@@ -163,11 +175,30 @@ Works with PDF, Word, PowerPoint, text files and photos of notes.</p>
 # visitor clicks "Get started", which sets st.session_state["entered"] = True.
 def enter_app():
     st.session_state["entered"] = True
+    st.session_state["switching"] = True
+    st.query_params["page"] = "app"  # remember it in the address bar
 
 
 def leave_app():
     st.session_state["entered"] = False
+    st.session_state["switching"] = True
+    st.query_params.clear()
 
+
+# A new session (refresh, browser Back/Forward, new tab) forgets session_state,
+# so read the address bar to put the user back where they were.
+if "entered" not in st.session_state:
+    st.session_state["entered"] = st.query_params.get("page") == "app"
+    st.session_state["switching"] = True  # the browser may still show the old page
+
+# While Streamlit redraws, it keeps the previous page's elements on screen
+# (faded) until the new page has finished drawing. When switching between the
+# landing page and the app, hide them so the two pages never show together.
+if st.session_state.pop("switching", False):
+    st.markdown(
+        "<style>[data-stale='true'] { display: none !important; }</style>",
+        unsafe_allow_html=True,
+    )
 
 if not st.session_state.get("entered"):
     # Hide the sidebar and its arrow so nothing but the landing page shows.
@@ -179,6 +210,7 @@ if not st.session_state.get("entered"):
   .block-container { max-width: 1000px; padding-top: 3rem; }
   .hero.big { padding: 3.5rem 0 1.4rem; }
   .hero.big h1 { font-size: 3.8rem; }
+  .hero.big .pill { font-size: 1.15rem; font-weight: 700; padding: .45rem 1.15rem; }
   .hero.big p { font-size: 1.25rem; max-width: 680px; }
   .how-title { text-align: center; margin: 2.6rem 0 .2rem; font-size: 1.6rem; font-weight: 700; }
   @media (max-width: 640px) {
@@ -187,7 +219,7 @@ if not st.session_state.get("entered"):
   }
 </style>
 <div class="hero big">
-  <div class="pill">📚 AI Study Buddy</div>
+  <div class="pill">📚 Mnemo · AI Study Buddy</div>
   <h1>Turn your notes into<br>a study system</h1>
   <p>Upload your notes and get answers with sources, exam-ready summaries,
   flashcards that come back at the right time, and tests that show what to revise.</p>
@@ -365,7 +397,8 @@ def reset_study_state():
 sources = embed.list_sources()
 
 with st.sidebar:
-    st.title("📚 AI Study Buddy")
+    st.title("📚 Mnemo")
+    st.caption("AI Study Buddy")
     st.button("← Start page", key="back_start", on_click=leave_app)
     st.subheader("Add notes")
     mode = st.radio(
@@ -446,6 +479,7 @@ with st.sidebar:
 
     st.divider()
     st.caption(f"AI model: {model_label()}")
+    st.caption("Search model: ready ✓" if embed.model_ready() else "Search model: loading… (first answer may be slow)")
 
 
 # ------------------------------------------------------------------ chat
@@ -469,34 +503,62 @@ def render_chat(active):
 
     if st.session_state.messages and st.button("Clear chat", key="clear_chat"):
         st.session_state.messages = []
+        clear_job("chat", "chat")
         st.rerun()
 
     for m in st.session_state.messages:
         with st.chat_message(m["role"]):
             st.write(m["content"])
-            show_sources(m.get("sources"))
+            # Only show sources when the answer actually used the notes,
+            # i.e. it cites them like [1]. Not for "hi" or "couldn't find".
+            if m["role"] == "assistant" and re.search(r"\[\d+\]", m["content"]):
+                show_sources(m.get("sources"))
 
-    question = st.chat_input("Ask a question about your notes")
-    if question:
-        history = list(st.session_state.messages)
-        st.session_state.messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.write(question)
+    waiting = get_job("chat", "chat") is not None
+    if waiting:
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    reply, used = rag.answer(
-                        question,
-                        history=history,
-                        source=None if search_all else active,
-                    )
-                except Exception as e:
-                    reply, used = friendly_error(e), []
-            st.write(reply)
-            show_sources(used)
+            wait_for_chat()
+
+    question = st.chat_input("Ask a question about your notes", disabled=waiting)
+    if question:
+        # Only save the question here. run_chat_jobs() (called on every rerun,
+        # whatever tab is open) starts the AI job for it in the background.
         st.session_state.messages.append(
-            {"role": "assistant", "content": reply, "sources": used}
+            {"role": "user", "content": question, "source": None if search_all else active}
         )
+        st.rerun()
+
+
+@st.fragment(run_every=1)
+def wait_for_chat():
+    """Shows 'Thinking...' and checks every second whether the answer is ready."""
+    job = get_job("chat", "chat")
+    if job is None or job["finished"]:
+        st.rerun()
+    st.markdown("⏳ Thinking...")
+
+
+def run_chat_jobs():
+    """Runs on every rerun, whichever tab is open.
+
+    1. If a background answer is ready, move it into the chat.
+    2. If the last message is a question with no answer and no job running,
+       start the job. So a question can never be left unanswered, even if a
+       rerun was cut short by a tab click at the wrong moment.
+    """
+    msgs = st.session_state.messages
+    job = get_job("chat", "chat")
+    if job and job["finished"]:
+        clear_job("chat", "chat")
+        if job["error"]:
+            reply, used = friendly_error(job["error"]), []
+        else:
+            reply, used = job["result"]
+        msgs.append({"role": "assistant", "content": reply, "sources": used})
+    elif job is None and msgs and msgs[-1]["role"] == "user":
+        last = msgs[-1]
+        question, src, history = last["content"], last.get("source"), list(msgs[:-1])
+        start_job("chat", "chat", lambda progress: rag.answer(question, history=history, source=src))
 
 
 # ------------------------------------------------------------------ summary
@@ -1074,7 +1136,7 @@ def render_home(active):
     st.markdown(
         """
 <div class="hero">
-  <div class="pill">📚 AI Study Buddy</div>
+  <div class="pill">📚 Mnemo · AI Study Buddy</div>
   <h1>Turn your notes into<br>a study system</h1>
   <p>Upload your notes and get answers with sources, exam-ready summaries,
   flashcards that come back at the right time, and tests that show what to revise.</p>
@@ -1112,6 +1174,10 @@ VIEWS = ["🏠 Home", "💬 Chat", "📝 Summary", "🃏 Flashcards", "✅ Test"
 if not sources:
     render_home(None)
     st.stop()
+# Short names for the address bar, e.g. ?page=app&view=chat
+VIEW_SLUGS = ["home", "chat", "summary", "flashcards", "test", "progress"]
+if "view" not in st.session_state and st.query_params.get("view") in VIEW_SLUGS:
+    st.session_state["view"] = VIEWS[VIEW_SLUGS.index(st.query_params["view"])]
 st.session_state.setdefault("view", VIEWS[0])
 if hasattr(st, "segmented_control"):
     view = st.segmented_control(
@@ -1122,12 +1188,17 @@ else:
         "View", VIEWS, horizontal=True, key="view", label_visibility="collapsed"
     )
 view = view or VIEWS[0]
+slug = VIEW_SLUGS[VIEWS.index(view)]
+if st.query_params.get("view") != slug:
+    st.query_params["view"] = slug  # keep the address bar in sync with the tab
 
 if active:
     st.markdown(
         f'<div class="file-chip">📄 {html.escape(active)}</div>', unsafe_allow_html=True
     )
 st.divider()
+
+run_chat_jobs()
 
 if view == VIEWS[0]:
     render_home(active)

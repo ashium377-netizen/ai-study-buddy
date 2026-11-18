@@ -1,16 +1,24 @@
+import threading
+
 import chromadb
 
 _model = None
+_model_lock = threading.Lock()  # stops two threads loading the model at once
 _client = chromadb.PersistentClient(path="chroma_db")
 
 
 def get_model():
     global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
+    with _model_lock:
+        if _model is None:
+            from sentence_transformers import SentenceTransformer
 
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
+            _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
+
+
+def model_ready():
+    return _model is not None
 
 
 def get_collection():

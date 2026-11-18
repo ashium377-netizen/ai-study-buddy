@@ -1,4 +1,4 @@
-# 📚 AI Study Buddy
+# 📚 Mnemo — AI Study Buddy
 
 Turn your own notes into a study system. Upload a PDF, Word file, PowerPoint, text file or a photo of your notes, then chat with them, summarise them, revise with spaced-repetition flashcards, take graded tests and track your progress.
 
